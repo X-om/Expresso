@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Request {
     pub method: String,
     pub path: String,
@@ -10,7 +10,15 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn new() -> Self { Self { method: String::new(), path: String::new(), version: String::new(), headers: HashMap::new(), body: None } }
+    pub fn new() -> Self {
+        Self {
+            method: String::new(),
+            path: String::new(),
+            version: String::new(),
+            headers: HashMap::new(),
+            body: None,
+        }
+    }
 
     /// Parse raw HTTP request bytes into Request struct
     pub fn from_raw(buffer: &[u8]) -> Option<Self> {
@@ -35,14 +43,28 @@ impl Request {
 
         let body = lines.collect::<Vec<&str>>().join("\r\n");
         let body = if body.is_empty() { None } else { Some(body) };
-        Some(Self { method, path, version, headers, body })
+        Some(Self {
+            method,
+            path,
+            version,
+            headers,
+            body,
+        })
     }
 
-    pub fn method(&self) -> &str { &self.method }
+    pub fn method(&self) -> &str {
+        &self.method
+    }
 
-    pub fn path(&self) -> &str { &self.path }
+    pub fn path(&self) -> &str {
+        &self.path
+    }
 
-    pub fn header(&self, key: &str) -> Option<&String> { self.headers.get(key) }
+    pub fn header(&self, key: &str) -> Option<&String> {
+        self.headers.get(key)
+    }
 
-    pub fn body(&self) -> Option<&String> { self.body.as_ref() }
+    pub fn body(&self) -> Option<&String> {
+        self.body.as_ref()
+    }
 }
