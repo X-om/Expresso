@@ -1,127 +1,160 @@
+/// Main Expresso application struct - simplified and modular
 use crate::{
+    handler::{IntoHandler, IntoHandlers},
     http::{request::Request, response::Response},
+    middleware::MiddlewareManager,
+    router::{Method, Router},
     server::listener::Server,
 };
-use std::{collections::HashMap, future::Future, net::SocketAddr, pin::Pin, sync::Arc};
-use tokio::sync::RwLock;
+use std::{net::SocketAddr, sync::Arc};
 
-type Next = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Response> + Send>> + Send + Sync>;
-
-type Handler = Arc<
-    dyn Fn(Request, Response, Next) -> Pin<Box<dyn Future<Output = Response> + Send>> + Send + Sync,
->;
-
+/// The main Expresso application
+///
+/// This is your web framework entry point. Create an instance with `Expresso::new()`,
+/// register routes and middleware, then call `listen()` to start the server.
 pub struct Expresso {
-    routes: Arc<RwLock<HashMap<String, Handler>>>,
-    middlewares: Arc<RwLock<Vec<Handler>>>,
+    router: Arc<Router>,
+    middleware: Arc<MiddlewareManager>,
 }
 
 impl Expresso {
+    /// Create a new Expresso application instance
+    ///
+    /// # Example
+    /// ```
+    /// let app = Expresso::new();
+    /// ```
     pub fn new() -> Self {
         Self {
-            routes: Arc::new(RwLock::new(HashMap::new())),
-            middlewares: Arc::new(RwLock::new(Vec::new())),
+            router: Arc::new(Router::new()),
+            middleware: Arc::new(MiddlewareManager::new()),
         }
     }
 
+    /// Register a global middleware
+    ///
+    /// Middleware runs for every request, in the order they are registered.
+    ///
+    /// # Example
+    /// ```
+    /// app.use_middleware(|req, res, next| async move {
+    ///     println!("Request: {} {}", req.method(), req.path());
+    ///     next().await
+    /// }).await;
+    /// ```
     pub async fn use_middleware<F>(&self, f: F)
     where
         F: IntoHandler,
     {
-        let mut middlewares = self.middlewares.write().await;
-        middlewares.push(f.into_handler());
+        self.middleware.add(f.into_handler()).await;
     }
 
+    /// Register a GET route
+    ///
+    /// # Arguments
+    /// * `path` - The URL path to match (e.g., "/users")
+    /// * `handlers` - One or more handlers as a tuple
+    ///
+    /// # Example
+    /// ```
+    /// app.get("/hello", (|req, res, next| async move {
+    ///     res.status(200).send("Hello!")
+    /// },)).await;
+    /// ```
     pub async fn get<H>(&self, path: &str, handlers: H)
     where
         H: IntoHandlers,
     {
-        let mut routes = self.routes.write().await;
-        routes.insert(format!("GET:{}", path), handlers.into_chained_handler());
+        self.router
+            .add_route(Method::GET, path, handlers.into_chained_handler())
+            .await;
     }
 
+    /// Register a POST route
     pub async fn post<H>(&self, path: &str, handlers: H)
     where
         H: IntoHandlers,
     {
-        let mut routes = self.routes.write().await;
-        routes.insert(format!("POST:{}", path), handlers.into_chained_handler());
+        self.router
+            .add_route(Method::POST, path, handlers.into_chained_handler())
+            .await;
     }
 
+    /// Register a PUT route
+    pub async fn put<H>(&self, path: &str, handlers: H)
+    where
+        H: IntoHandlers,
+    {
+        self.router
+            .add_route(Method::PUT, path, handlers.into_chained_handler())
+            .await;
+    }
+
+    /// Register a DELETE route
+    pub async fn delete<H>(&self, path: &str, handlers: H)
+    where
+        H: IntoHandlers,
+    {
+        self.router
+            .add_route(Method::DELETE, path, handlers.into_chained_handler())
+            .await;
+    }
+
+    /// Register a PATCH route
+    pub async fn patch<H>(&self, path: &str, handlers: H)
+    where
+        H: IntoHandlers,
+    {
+        self.router
+            .add_route(Method::PATCH, path, handlers.into_chained_handler())
+            .await;
+    }
+
+    /// Start the HTTP server
+    ///
+    /// # Arguments
+    /// * `port` - Port number to listen on
+    /// * `callback` - Function called once when server starts
+    ///
+    /// # Example
+    /// ```
+    /// app.listen(3000, || {
+    ///     println!("Server running on port 3000");
+    /// }).await
+    /// ```
     pub async fn listen<F>(&self, port: u16, callback: F) -> tokio::io::Result<()>
     where
         F: FnOnce() + Send + 'static,
     {
         let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
         let server = Server::new(addr);
-        let routes = Arc::clone(&self.routes);
-        let middlewares = Arc::clone(&self.middlewares);
+        let router = Arc::clone(&self.router);
+        let middleware = Arc::clone(&self.middleware);
 
         callback();
 
         server
             .listen(move |req: Request| {
-                let routes = routes.clone();
-                let middlewares = middlewares.clone();
+                let router = router.clone();
+                let middleware = middleware.clone();
 
                 async move {
                     let res = Response::new();
-                    let key = format!("{}:{}", req.method(), req.path());
+                    let method = req.method();
+                    let path = req.path();
 
-                    let route_handler = {
-                        let routes = routes.read().await;
-                        routes.get(&key).cloned()
-                    };
+                    // Find the route handler or use 404 handler
+                    let route_handler =
+                        router.find_handler(method, path).await.unwrap_or_else(|| {
+                            Arc::new(|_req, res, _next| {
+                                Box::pin(async move { res.status(404).send("Not Found") })
+                            })
+                        });
 
-                    let final_handler: Handler = if let Some(h) = route_handler {
-                        h
-                    } else {
-                        Arc::new(|_req, res, _next| {
-                            Box::pin(async move { res.status(404).send("Not Found") })
-                        })
-                    };
+                    // Build middleware chain that wraps the route handler
+                    let chain = middleware.build_chain(route_handler).await;
 
-                    let middlewares = middlewares.read().await.clone();
-                    let chain =
-                        middlewares
-                            .into_iter()
-                            .rev()
-                            .fold(final_handler, |next_handler, mw| {
-                                Arc::new(move |req: Request, res: Response, _final_next: Next| {
-                                    let next_handler = next_handler.clone();
-                                    let mw = mw.clone();
-                                    Box::pin(async move {
-                                        let req_clone = req.clone();
-                                        let res_clone = res.clone();
-                                        mw(
-                                            req,
-                                            res,
-                                            Arc::new(move || {
-                                                let next_handler = next_handler.clone();
-                                                let req_clone = req_clone.clone();
-                                                let res_clone = res_clone.clone();
-                                                Box::pin(async move {
-                                                    next_handler(
-                                                        req_clone,
-                                                        res_clone,
-                                                        Arc::new(|| {
-                                                            Box::pin(async {
-                                                                Response::new()
-                                                                    .status(500)
-                                                                    .send("Internal Error")
-                                                            })
-                                                        }),
-                                                    )
-                                                    .await
-                                                })
-                                            }),
-                                        )
-                                        .await
-                                    })
-                                })
-                            });
-
-                    // Execute chain
+                    // Execute the complete chain
                     chain(
                         req,
                         res,
@@ -134,216 +167,15 @@ impl Expresso {
             })
             .await
     }
-}
 
-pub trait IntoHandler {
-    fn into_handler(self) -> Handler;
-}
-
-impl<F, Fut> IntoHandler for F
-where
-    F: Fn(Request, Response, Next) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Response> + Send + 'static,
-{
-    fn into_handler(self) -> Handler {
-        Arc::new(move |req, res, next| Box::pin(self(req, res, next)))
+    /// Get all registered routes (useful for debugging)
+    pub async fn routes(&self) -> Vec<String> {
+        self.router.get_all_routes().await
     }
 }
 
-pub trait IntoHandlers: Sized {
-    fn into_handler_vec(self) -> Vec<Handler>;
-    fn into_chained_handler(self) -> Handler {
-        let handlers = self.into_handler_vec();
-        if handlers.is_empty() {
-            return Arc::new(|_req, res, _next| Box::pin(async move { res }));
-        }
-
-        Arc::new(move |req, res, final_next| {
-            let handlers = handlers.clone();
-            Box::pin(async move { execute_handlers(req, res, handlers, 0, final_next).await })
-        })
-    }
-}
-
-// Helper function to recursively execute handlers
-fn execute_handlers(
-    req: Request,
-    res: Response,
-    handlers: Vec<Handler>,
-    index: usize,
-    final_next: Next,
-) -> Pin<Box<dyn Future<Output = Response> + Send>> {
-    Box::pin(async move {
-        if index >= handlers.len() {
-            return res;
-        }
-
-        let handler = handlers[index].clone();
-        let req_clone = req.clone();
-        let res_clone = res.clone();
-        let handlers_clone = handlers.clone();
-
-        handler(
-            req,
-            res,
-            Arc::new(move || {
-                let req_clone = req_clone.clone();
-                let res_clone = res_clone.clone();
-                let handlers_clone = handlers_clone.clone();
-                let final_next = final_next.clone();
-                Box::pin(async move {
-                    execute_handlers(req_clone, res_clone, handlers_clone, index + 1, final_next)
-                        .await
-                })
-            }),
-        )
-        .await
-    })
-}
-
-// Single handler
-impl<A> IntoHandlers for (A,)
-where
-    A: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![self.0.into_handler()]
-    }
-}
-
-// Two handlers
-impl<A, B> IntoHandlers for (A, B)
-where
-    A: IntoHandler,
-    B: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![self.0.into_handler(), self.1.into_handler()]
-    }
-}
-
-// Three handlers
-impl<A, B, C> IntoHandlers for (A, B, C)
-where
-    A: IntoHandler,
-    B: IntoHandler,
-    C: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![
-            self.0.into_handler(),
-            self.1.into_handler(),
-            self.2.into_handler(),
-        ]
-    }
-}
-
-// Four handlers
-impl<A, B, C, D> IntoHandlers for (A, B, C, D)
-where
-    A: IntoHandler,
-    B: IntoHandler,
-    C: IntoHandler,
-    D: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![
-            self.0.into_handler(),
-            self.1.into_handler(),
-            self.2.into_handler(),
-            self.3.into_handler(),
-        ]
-    }
-}
-
-// Five handlers
-impl<A, B, C, D, E> IntoHandlers for (A, B, C, D, E)
-where
-    A: IntoHandler,
-    B: IntoHandler,
-    C: IntoHandler,
-    D: IntoHandler,
-    E: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![
-            self.0.into_handler(),
-            self.1.into_handler(),
-            self.2.into_handler(),
-            self.3.into_handler(),
-            self.4.into_handler(),
-        ]
-    }
-}
-
-// Six handlers
-impl<A, B, C, D, E, F> IntoHandlers for (A, B, C, D, E, F)
-where
-    A: IntoHandler,
-    B: IntoHandler,
-    C: IntoHandler,
-    D: IntoHandler,
-    E: IntoHandler,
-    F: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![
-            self.0.into_handler(),
-            self.1.into_handler(),
-            self.2.into_handler(),
-            self.3.into_handler(),
-            self.4.into_handler(),
-            self.5.into_handler(),
-        ]
-    }
-}
-
-// Seven handlers
-impl<A, B, C, D, E, F, G> IntoHandlers for (A, B, C, D, E, F, G)
-where
-    A: IntoHandler,
-    B: IntoHandler,
-    C: IntoHandler,
-    D: IntoHandler,
-    E: IntoHandler,
-    F: IntoHandler,
-    G: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![
-            self.0.into_handler(),
-            self.1.into_handler(),
-            self.2.into_handler(),
-            self.3.into_handler(),
-            self.4.into_handler(),
-            self.5.into_handler(),
-            self.6.into_handler(),
-        ]
-    }
-}
-
-// Eight handlers
-impl<A, B, C, D, E, F, G, H> IntoHandlers for (A, B, C, D, E, F, G, H)
-where
-    A: IntoHandler,
-    B: IntoHandler,
-    C: IntoHandler,
-    D: IntoHandler,
-    E: IntoHandler,
-    F: IntoHandler,
-    G: IntoHandler,
-    H: IntoHandler,
-{
-    fn into_handler_vec(self) -> Vec<Handler> {
-        vec![
-            self.0.into_handler(),
-            self.1.into_handler(),
-            self.2.into_handler(),
-            self.3.into_handler(),
-            self.4.into_handler(),
-            self.5.into_handler(),
-            self.6.into_handler(),
-            self.7.into_handler(),
-        ]
+impl Default for Expresso {
+    fn default() -> Self {
+        Self::new()
     }
 }

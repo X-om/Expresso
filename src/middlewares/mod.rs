@@ -1,1 +1,3 @@
-// Middleware modules will go here
+pub mod cors;
+/// Common middleware utilities
+pub mod logger;
