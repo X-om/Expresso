@@ -1,17 +1,8 @@
-/// CORS (Cross-Origin Resource Sharing) middleware
 use crate::{
     http::{request::Request, response::Response},
     types::Next,
 };
 
-/// Default CORS middleware - allows all origins
-///
-/// # Example
-/// ```
-/// use expresso::middlewares::cors::cors;
-///
-/// app.use_middleware(cors).await;
-/// ```
 pub async fn cors(_req: Request, _res: Response, next: Next) -> Response {
     let res = next().await;
     res.set_header("Access-Control-Allow-Origin", "*")
@@ -25,14 +16,6 @@ pub async fn cors(_req: Request, _res: Response, next: Next) -> Response {
         )
 }
 
-/// CORS with specific origin
-///
-/// # Example
-/// ```
-/// use expresso::middlewares::cors::with_origin;
-///
-/// app.use_middleware(with_origin("https://example.com")).await;
-/// ```
 pub fn with_origin(
     origin: &'static str,
 ) -> impl Fn(

@@ -8,7 +8,6 @@ pub mod router;
 pub mod server;
 pub mod types;
 
-// Re-export commonly used items for convenience
 pub mod prelude {
     pub use crate::app::expresso::Expresso;
     pub use crate::handler::{IntoHandler, IntoHandlers};
