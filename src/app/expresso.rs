@@ -8,22 +8,12 @@ use crate::{
 };
 use std::{net::SocketAddr, sync::Arc};
 
-/// The main Expresso application
-///
-/// This is your web framework entry point. Create an instance with `Expresso::new()`,
-/// register routes and middleware, then call `listen()` to start the server.
 pub struct Expresso {
     router: Arc<Router>,
     middleware: Arc<MiddlewareManager>,
 }
 
 impl Expresso {
-    /// Create a new Expresso application instance
-    ///
-    /// # Example
-    /// ```
-    /// let app = Expresso::new();
-    /// ```
     pub fn new() -> Self {
         Self {
             router: Arc::new(Router::new()),
@@ -31,17 +21,6 @@ impl Expresso {
         }
     }
 
-    /// Register a global middleware
-    ///
-    /// Middleware runs for every request, in the order they are registered.
-    ///
-    /// # Example
-    /// ```
-    /// app.use_middleware(|req, res, next| async move {
-    ///     println!("Request: {} {}", req.method(), req.path());
-    ///     next().await
-    /// }).await;
-    /// ```
     pub async fn use_middleware<F>(&self, f: F)
     where
         F: IntoHandler,
@@ -49,18 +28,6 @@ impl Expresso {
         self.middleware.add(f.into_handler()).await;
     }
 
-    /// Register a GET route
-    ///
-    /// # Arguments
-    /// * `path` - The URL path to match (e.g., "/users")
-    /// * `handlers` - One or more handlers as a tuple
-    ///
-    /// # Example
-    /// ```
-    /// app.get("/hello", (|req, res, next| async move {
-    ///     res.status(200).send("Hello!")
-    /// },)).await;
-    /// ```
     pub async fn get<H>(&self, path: &str, handlers: H)
     where
         H: IntoHandlers,
@@ -110,18 +77,6 @@ impl Expresso {
             .await;
     }
 
-    /// Start the HTTP server
-    ///
-    /// # Arguments
-    /// * `port` - Port number to listen on
-    /// * `callback` - Function called once when server starts
-    ///
-    /// # Example
-    /// ```
-    /// app.listen(3000, || {
-    ///     println!("Server running on port 3000");
-    /// }).await
-    /// ```
     pub async fn listen<F>(&self, port: u16, callback: F) -> tokio::io::Result<()>
     where
         F: FnOnce() + Send + 'static,
@@ -153,8 +108,6 @@ impl Expresso {
 
                     // Build middleware chain that wraps the route handler
                     let chain = middleware.build_chain(route_handler).await;
-
-                    // Execute the complete chain
                     chain(
                         req,
                         res,
