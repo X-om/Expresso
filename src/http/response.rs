@@ -29,24 +29,24 @@ impl Response {
             _ => "Unknown",
         }
         .to_string();
-        self
+        return self;
     }
 
     pub fn set_header(mut self, key: &str, value: &str) -> Self {
         self.headers.insert(key.to_string(), value.to_string());
-        self
+        return self;
     }
 
     pub fn send(mut self, body: &str) -> Self {
         self.body = Some(body.to_string());
-        self
+        return self;
     }
 
     pub fn json(mut self, data: &str) -> Self {
         self.headers
             .insert("Content-Type".into(), "application/json".into());
         self.body = Some(data.to_string());
-        self
+        return self;
     }
 
     pub fn build(&self) -> String {
@@ -58,9 +58,9 @@ impl Response {
             headers.push_str(&format!("{}: {}\r\n", k, v));
         }
 
-        format!(
+        return format!(
             "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n{}\r\n{}",
             self.status_code, self.status_text, content_length, headers, body_str
-        )
+        );
     }
 }
