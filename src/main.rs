@@ -1,5 +1,4 @@
 use expresso::app::expresso::Expresso;
-use expresso::app::expresso::Next;
 use expresso::http::request::Request;
 use expresso::http::response::Response;
 
@@ -9,14 +8,15 @@ async fn main() -> tokio::io::Result<()> {
 
     app.get(
         "/hello",
-        |_req: Request, res: Response, _next: Next| async move {
+        (|_req: Request, res: Response, _next| async move {
             return res.status(200).send("Hello, World!");
-        },
-    );
+        },),
+    )
+    .await;
 
     app.post(
         "/submit",
-        |req: Request, res: Response, _next: Next| async move {
+        (|req: Request, res: Response, _next| async move {
             let body: &String = match req.body() {
                 Some(body) => body,
                 None => {
@@ -24,12 +24,13 @@ async fn main() -> tokio::io::Result<()> {
                 }
             };
             return res.json(&format!("{}", body));
-        },
-    );
+        },),
+    )
+    .await;
 
     let port = 3000;
-    app.listen(port, || {
-        println!("Server is running on http://localhost:{}", port);
+    app.listen(port, move || {
+        println!("🚀 Server running at http://127.0.0.1:{}", port);
     })
     .await
 }
